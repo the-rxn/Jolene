@@ -1,11 +1,20 @@
 package main
 
 import (
+	"errors"
+	"math/rand"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"database/sql"
+
+	_ "github.com/mattn/go-sqlite3"
+
 	tg "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	dot "github.com/joho/godotenv"
 	log "github.com/sirupsen/logrus"
-	"math/rand"
-	"os"
 )
 
 // returns 1 random repponse when getting unknown command from the user
@@ -23,6 +32,36 @@ func generateRandomUnknownResponse() string {
 
 const JHPATH = "./files/joleneHello.ogg"
 
+type DB struct {
+	sql    *sql.DB
+	stmt   *sql.Stmt
+	buffer []StorageLine
+}
+type StorageLine struct {
+	userID  int64
+	message string
+	time    time.Time
+}
+
+const (
+	insertSQL = `
+	INSERT INTO MAIN 
+	(userid, message, time) 
+	VALUES (?, ?, ?)
+	`
+	schemaSQL = `
+	CREATE TABLE IF NOT EXISTS main (
+	userID INTEGER,
+	message STRING,
+	time TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS main_time ON main(time);
+	CREATE INDEX IF NOT EXISTS main_userID ON main(userID);
+
+	`
+)
+
 func init() {
 	// setting up logus
 	log.SetOutput(os.Stdout)
@@ -30,13 +69,98 @@ func init() {
 	log.SetFormatter(&log.TextFormatter{DisableLevelTruncation: true, ForceColors: true})
 	// setting up dotenv
 	if err := dot.Load(); err != nil {
-		log.Fatalf("Error loading .env file: %s\n", err)
+		log.Fatalf("Error loading .env file: %s", err)
 	}
+
+}
+
+func NewDB(dbFile string) (*DB, error) {
+	sqlDB, err := sql.Open("sqlite3", dbFile)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = sqlDB.Exec(schemaSQL); err != nil {
+		return nil, err
+	}
+
+	stmt, err := sqlDB.Prepare(insertSQL)
+	if err != nil {
+		return nil, err
+	}
+	db := DB{
+		sql:    sqlDB,
+		stmt:   stmt,
+		buffer: make([]StorageLine, 0, 512),
+	}
+	return &db, nil
+}
+
+func (db *DB) Add(storageLine StorageLine) error {
+	if len(db.buffer) == cap(db.buffer) {
+		return errors.New("storageLines buffer is full")
+	}
+
+	db.buffer = append(db.buffer, storageLine)
+	if len(db.buffer) == cap(db.buffer) {
+		if err := db.Flush(); err != nil {
+			log.Error("unable to flush storageLines: %w", err)
+			return err
+		}
+	}
+
+	return nil
+}
+
+// Flush pending txs into DB.
+func (db *DB) Flush() error {
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return err
+	}
+
+	for _, storageLine := range db.buffer {
+		_, err := tx.Stmt(db.stmt).Exec(storageLine.userID, storageLine.message, storageLine.time)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+
+	db.buffer = db.buffer[:0]
+	return tx.Commit()
+}
+
+func (db *DB) Close() error {
+	defer func() {
+		db.stmt.Close()
+		db.sql.Close()
+	}()
+
+	if err := db.Flush(); err != nil {
+		return err
+	}
+
+	return nil
 }
 func main() {
+	// setting up db connection
+	dbPath, exists := os.LookupEnv("DBPATH")
+	if !exists {
+		log.Fatalf("No DB found!")
+	}
+	db, err := NewDB(dbPath)
+	if err != nil {
+		log.Fatalf("Coudln't connect to the database: %s", err)
+	}
+	defer func() {
+		log.Infof("Closing db connection.")
+		db.Close()
+	}()
+
+	// setting up telegram api
 	tgApiKey, exists := os.LookupEnv("TGAPIKEY")
 	if exists {
-		log.Debugf("TGAPIKEY: %s\n", tgApiKey)
+		log.Debugf("TGAPIKEY: %s", tgApiKey)
 	}
 	bot, err := tg.NewBotAPI(tgApiKey)
 	if err != nil {
@@ -53,12 +177,32 @@ func main() {
 
 	updates := bot.GetUpdatesChan(u)
 
+	shutdown := make(chan os.Signal, 1)
+	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		s := <-shutdown
+		signal.Stop(shutdown)
+		log.Printf("Got a %s signal, stop receiving updates, app is closing...", s)
+		db.Close()
+		bot.StopReceivingUpdates()
+	}()
+
 	for update := range updates {
 		if update.Message == nil { // If it's not a message, we don't care
 			continue
 		}
 		if !update.Message.IsCommand() { // If we get a message, NOT A COMMAND
 			log.Infof("[@%s:%d] %s", update.Message.From.UserName, update.Message.From.ID, update.Message.Text)
+
+			dbEntry := StorageLine{
+				userID:  update.Message.From.ID,
+				message: update.Message.Text,
+				time:    time.Now(),
+			}
+			if err := db.Add(dbEntry); err != nil {
+				log.Errorf("[DB] Couldn't write to db: %s", err)
+			}
+			log.Debugln("Inserted 1 message to db")
 
 			msg := tg.NewMessage(update.Message.Chat.ID, update.Message.Text)
 			msg.ReplyToMessageID = update.Message.MessageID
@@ -69,7 +213,7 @@ func main() {
 			// init an empty message
 			msgToSend := tg.NewMessage(update.Message.Chat.ID, "")
 			command := update.Message.Command()
-			log.Infof("{/%s} [@%s:%d]\n", command, update.Message.From, update.Message.From.ID)
+			log.Infof("{/%s} [@%s:%d]", command, update.Message.From, update.Message.From.ID)
 
 			// generate response text
 			handleCommand(command, &msgToSend, bot)
@@ -102,9 +246,9 @@ func sendHelloMessage(chatID int64, bot *tg.BotAPI) {
 	helloVoice := tg.FilePath(JHPATH)
 	handle, _, err := helloVoice.UploadData()
 	if err != nil {
-		log.Infof("Couldn't upload file: %s\n", err)
+		log.Infof("Couldn't upload file: %s", err)
 	}
-	log.Debugf("handle: %s\n", handle)
+	log.Debugf("handle: %s", handle)
 	msg := tg.NewAudio(chatID, helloVoice)
 	bot.Send(msg)
 }
