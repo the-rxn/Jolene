@@ -1,0 +1,3 @@
+[submodule "backend/api/go-llama.cpp"]
+	path = backend/api/go-llama.cpp
+	url = https://github.com/go-skynet/go-llama.cpp
