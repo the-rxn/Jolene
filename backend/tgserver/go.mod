@@ -1,4 +1,4 @@
-module github.com/coppi3/jolene/backend
+module github.com/coppi3/jolene/backend/tgserver
 
 go 1.21.0
 

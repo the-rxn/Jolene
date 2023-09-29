@@ -222,6 +222,7 @@ func main() {
 			msgToSend.ReplyToMessageID = update.Message.MessageID
 			bot.Send(msgToSend)
 		}
+		db.Flush()
 	}
 }
 

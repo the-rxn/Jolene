@@ -1,2 +1,2 @@
-backend/.env
-backend/database.db
+backend/tgserver/.env
+backend/tgserver/database.db
