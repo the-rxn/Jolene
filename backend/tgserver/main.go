@@ -102,20 +102,21 @@ func main() {
 			if err != nil {
 				log.Debugf("Encountered error during fetching previous msgs: %s", err)
 			}
+			promptFromRxMsg := []openai.ChatCompletionMessage{
+				{
+					Role:    openai.ChatMessageRoleUser,
+					Content: rxMsg,
+				}}
 			if previousMsgs == nil {
 
 				// resp, err := handlers.TextHandler(&msg, bot, rxMsg)
-				promptFromRxMsg := []openai.ChatCompletionMessage{
-					openai.ChatCompletionMessage{
-						Role:    openai.ChatMessageRoleUser,
-						Content: rxMsg,
-					}}
 				resp, err := handlers.PostGenerateText(promptFromRxMsg)
 				if err != nil {
 					log.Errorf("Didn't get response from API: %s", err)
 				}
 				respStorageLine := myDb.StorageLine{
-					UserID:  0,
+					UserID:  update.Message.From.ID,
+					Bot:     true,
 					Message: resp,
 					Time:    time.Now(),
 				}
@@ -130,20 +131,21 @@ func main() {
 					if msg.Bot { // if bot
 						// prompt = fmt.Sprintf("%s[INST]%s[/INST]\n", prompt, msg.Message)
 						prompt := openai.ChatCompletionMessage{
-							Role:    openai.ChatMessageRoleUser,
+							Role:    openai.ChatMessageRoleAssistant,
 							Content: msg.Message,
 						}
 						prompts = append(prompts, prompt)
 					} else { // if user
 						// prompt = fmt.Sprintf("%s\n%s\n", prompt, msg.Message)
 						prompt := openai.ChatCompletionMessage{
-							Role:    openai.ChatMessageRoleAssistant,
+							Role:    openai.ChatMessageRoleUser,
 							Content: msg.Message,
 						}
 						prompts = append(prompts, prompt)
 					}
 
 				}
+				prompts = append(prompts, promptFromRxMsg[0])
 				// prompt = fmt.Sprintf("%s%s", prompt, rxMsg)
 				// log.Debugf("Got this previous messages from [%s:%d]\n---\n%s\n---", update.Message.From, update.Message.From.ID, prompts)
 				log.Debugf("Got %d previous messages from [%s:%d]", len(prompts), update.Message.From, update.Message.From.ID)
@@ -170,7 +172,10 @@ func main() {
 			// msg.ReplyToMessageID = update.Message.MessageID
 
 			bot.Send(msg)
-			db.Flush()
+			err = db.Flush()
+			if err != nil {
+				log.Errorf("Couldn't flush DB: %s", err)
+			}
 		}
 		if update.Message.IsCommand() {
 			// init an empty message

@@ -2,11 +2,14 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	// "encoding/json"
 	// "io"
 	"math/rand"
 	"net/http"
+
 	// "net/url"
+	"github.com/avast/retry-go/v4"
 
 	"github.com/coppi3/jolene/backend/tgserver/utils"
 	tg "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -101,34 +104,60 @@ type GenTextReq struct {
 func PostGenerateText(msgs []openai.ChatCompletionMessage) (string, error) {
 	// io.WriteString(w, "This is an API for Jolene. If you don't know how you got here, please, contact the owner @hdydylmaily using telegram.")
 	// reading body
+
+	attempts := 3
 	log.Println(msgs)
+	log.Println(msgs[0].Role, msgs[0].Content)
+	resp, err := retry.DoWithData(
+		func() (string, error) {
+			if attempts == 0 {
+				return "", errors.New("Too many unsucessful text generation attempts")
+			}
+			// chat stuff
+			config := openai.ClientConfig{
+				BaseURL:    "http://localhost:1489/",
+				HTTPClient: http.DefaultClient,
+			}
+			client := openai.NewClientWithConfig(config)
+			modelName := "LLaMA_CPP"
+			// resp, err := client.Create
+			resp, err := client.CreateChatCompletion(
+				context.Background(),
+				openai.ChatCompletionRequest{
+					Model:    modelName,
+					Messages: msgs,
+					// Messages: []openai.ChatCompletionMessage{
+					// 	{
+					// 		Role:    openai.ChatMessageRoleUser,
+					// 		Content: text,
+					// 	},
+					// },
+				},
+			)
 
-	// chat stuff
-	config := openai.ClientConfig{
-		BaseURL:    "http://localhost:1489/",
-		HTTPClient: http.DefaultClient,
-	}
-	client := openai.NewClientWithConfig(config)
-	modelName := "LLaMA_CPP"
-	// resp, err := client.Create
-	resp, err := client.CreateChatCompletion(
-		context.Background(),
-		openai.ChatCompletionRequest{
-			Model:    modelName,
-			Messages: msgs,
-			// Messages: []openai.ChatCompletionMessage{
-			// 	{
-			// 		Role:    openai.ChatMessageRoleUser,
-			// 		Content: text,
-			// 	},
-			// },
-		},
+			if err != nil {
+				log.Errorf("ChatCompletion error: %v\n", err)
+				return "", err
+			}
+			respMsg := resp.Choices[0].Message.Content
+			if respMsg == "\n" || len(respMsg) < 2 {
+				log.Errorf("GOT ERRORLIKE RESPONSE: %s", respMsg)
+				attempts--
+				return "", errors.New("Too short")
+			}
+			log.Infof("Got response: %s", resp.Choices[0].Message.Content)
+			return resp.Choices[0].Message.Content, nil
+		}, retry.RetryIf(func(err error) bool {
+			if err.Error() == "Too short" {
+				log.Errorf("GOT A TOO SHORT ANSWER, retrting")
+				return true
+			}
+			return false
+		}),
 	)
-
 	if err != nil {
-		log.Errorf("ChatCompletion error: %v\n", err)
-		return "", err
+		// handle error
 	}
-	log.Infof("Got response: %s", resp.Choices[0].Message.Content)
-	return resp.Choices[0].Message.Content, nil
+	return resp, nil
+
 }

@@ -85,7 +85,7 @@ func (db *DB) Flush() error {
 	}
 
 	for _, storageLine := range db.buffer {
-		_, err := tx.Stmt(db.stmt).Exec(storageLine.UserID, storageLine.Message, storageLine.Time)
+		_, err := tx.Stmt(db.stmt).Exec(storageLine.UserID, storageLine.Bot, storageLine.Message, storageLine.Time)
 		if err != nil {
 			tx.Rollback()
 			return err
@@ -120,7 +120,7 @@ func (db *DB) GetMessagesByUserID(userID int64) ([]StorageLine, error) {
 	var msgs []StorageLine
 	for rows.Next() {
 		var msg StorageLine
-		if err := rows.Scan(&msg.UserID, &msg.Message, &msg.Time); err != nil {
+		if err := rows.Scan(&msg.UserID, &msg.Bot, &msg.Message, &msg.Time); err != nil {
 			log.Errorf("Couldn't read rows from [userID:%d]", userID)
 			return nil, err
 		}
@@ -130,6 +130,7 @@ func (db *DB) GetMessagesByUserID(userID int64) ([]StorageLine, error) {
 		log.Errorf("Some weird error during execution SQL SELECT: %s", err)
 		return msgs, err
 	}
+	log.Debugf("Fethced %d msgs from DB", len(msgs))
 	return msgs, nil
 }
 
