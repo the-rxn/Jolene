@@ -35,9 +35,9 @@ func main() {
 	// init multiplexer and handlers
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", handlers.GetRoot)
-	mux.HandleFunc("/generate_text", handlers.PutGenerateText)
-	mux.HandleFunc("/generate_voice", handlers.PutGenerateVoice)
-	mux.HandleFunc("/convert_to_audio", handlers.PutConvertToAudio)
+	mux.HandleFunc("/generate_text", handlers.PostGenerateText)
+	mux.HandleFunc("/generate_voice", handlers.PostGenerateVoice)
+	mux.HandleFunc("/convert_to_audio", handlers.PostConvertToAudio)
 
 	err := http.ListenAndServe(SERVERPORT, mux)
 	if err != nil {

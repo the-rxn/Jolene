@@ -1,3 +1,0 @@
-[submodule "backend/api/llama.cpp"]
-	path = backend/api/llama.cpp
-	url = https://github.com/ggerganov/llama.cpp

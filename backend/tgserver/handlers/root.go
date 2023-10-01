@@ -1,10 +1,15 @@
 package handlers
 
 import (
+	"encoding/json"
+	"io"
+	"math/rand"
+	"net/http"
+	"net/url"
+
 	"github.com/coppi3/jolene/backend/tgserver/utils"
 	tg "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	log "github.com/sirupsen/logrus"
-	"math/rand"
 )
 
 // returns 1 random repponse when getting unknown command from the user
@@ -54,4 +59,34 @@ func unknownHandler(msg *tg.MessageConfig, bot *tg.BotAPI) {
 	// implement payment logic here!
 	//
 	msg.Text = generateRandomUnknownResponse()
+}
+
+type GenTextReq struct {
+	Text string `json:"text"`
+}
+
+func TextHandler(msg *tg.MessageConfig, bot *tg.BotAPI, incomingMsg string) {
+	URL := "http://localhost:1337/generate_text"
+	// one-line post request/response...
+	response, err := http.PostForm(URL, url.Values{"text": []string{incomingMsg}})
+
+	// okay, moving on...
+	if err != nil {
+		//handle postform error
+	}
+
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	log.Debugf("%s", body)
+	if err != nil {
+		//handle read response error
+	}
+	var jsonResp map[string]string
+	errJSON := json.Unmarshal(body, &jsonResp)
+	if errJSON != nil {
+		log.Debugf("Coudln't decode reponse from API: %s", err)
+	}
+
+	log.Printf("%s\n", string(body))
+	msg.Text = jsonResp["response"]
 }

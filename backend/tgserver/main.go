@@ -87,8 +87,15 @@ func main() {
 			}
 			log.Debugln("Inserted 1 message to db")
 
-			msg := tg.NewMessage(update.Message.Chat.ID, update.Message.Text)
-			msg.ReplyToMessageID = update.Message.MessageID
+			// Pretend like we're typing
+			chatAction := tg.NewChatAction(update.Message.Chat.ID, tg.ChatTyping)
+			bot.Send(chatAction)
+			// time.Sleep(5 * 1_000) // 5 sec
+
+			msg := tg.NewMessage(update.Message.Chat.ID, "")
+			handlers.TextHandler(&msg, bot, update.Message.Text)
+			// msg := tg.NewMessage(update.Message.Chat.ID, update.Message.Text)
+			// msg.ReplyToMessageID = update.Message.MessageID
 
 			bot.Send(msg)
 		}
