@@ -16,6 +16,7 @@ type DB struct {
 }
 type StorageLine struct {
 	UserID  int64
+	Bot     bool
 	Message string
 	Time    time.Time
 }
@@ -23,12 +24,13 @@ type StorageLine struct {
 const (
 	insertSQL = `
 	INSERT INTO MAIN 
-	(userid, message, time) 
-	VALUES (?, ?, ?)
+	(userid, bot, message, time) 
+	VALUES (?, ?, ?, ?)
 	`
 	schemaSQL = `
 	CREATE TABLE IF NOT EXISTS main (
 	userID INTEGER,
+	bot BOOL,
 	message STRING,
 	time TIMESTAMP
 	);
@@ -106,3 +108,52 @@ func (db *DB) Close() error {
 
 	return nil
 }
+
+func (db *DB) GetMessagesByUserID(userID int64) ([]StorageLine, error) {
+	rows, err := db.sql.Query("SELECT * FROM main WHERE userID = ?", userID)
+	if err != nil {
+		log.Errorf("Couldn't fetch messages from [userID:%d]", userID)
+		return nil, err
+	}
+	defer rows.Close()
+
+	var msgs []StorageLine
+	for rows.Next() {
+		var msg StorageLine
+		if err := rows.Scan(&msg.UserID, &msg.Message, &msg.Time); err != nil {
+			log.Errorf("Couldn't read rows from [userID:%d]", userID)
+			return nil, err
+		}
+		msgs = append(msgs, msg)
+	}
+	if err = rows.Err(); err != nil {
+		log.Errorf("Some weird error during execution SQL SELECT: %s", err)
+		return msgs, err
+	}
+	return msgs, nil
+}
+
+// func albumsByArtist(artist string) ([]Album, error) {
+//     rows, err := db.Query("SELECT * FROM album WHERE artist = ?", artist)
+//     if err != nil {
+//         return nil, err
+//     }
+//     defer rows.Close()
+//
+//     // An album slice to hold data from returned rows.
+//     var albums []Album
+//
+//     // Loop through rows, using Scan to assign column data to struct fields.
+//     for rows.Next() {
+//         var alb Album
+//         if err := rows.Scan(&alb.ID, &alb.Title, &alb.Artist,
+//             &alb.Price, &alb.Quantity); err != nil {
+//             return albums, err
+//         }
+//         albums = append(albums, album)
+//     }
+//     if err = rows.Err(); err != nil {
+//         return albums, err
+//     }
+//     return albums, nil
+// }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/sashabaranov/go-openai"
+	log "github.com/sirupsen/logrus"
 	"io"
 	"net/http"
 )
@@ -31,6 +32,7 @@ func PostGenerateText(w http.ResponseWriter, r *http.Request) {
 	}
 	client := openai.NewClientWithConfig(config)
 	modelName := "LLaMA_CPP"
+	// resp, err := client.Create
 	resp, err := client.CreateChatCompletion(
 		context.Background(),
 		openai.ChatCompletionRequest{
@@ -50,6 +52,7 @@ func PostGenerateText(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	log.Infof("Got response: %s", resp)
 	response := GenerateTextResp{Response: resp.Choices[0].Message.Content}
 	// responseJSON, err := json.Marshal(response)
 	if err != nil {

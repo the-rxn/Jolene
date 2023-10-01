@@ -1,14 +1,16 @@
 package handlers
 
 import (
-	"encoding/json"
-	"io"
+	"context"
+	// "encoding/json"
+	// "io"
 	"math/rand"
 	"net/http"
-	"net/url"
+	// "net/url"
 
 	"github.com/coppi3/jolene/backend/tgserver/utils"
 	tg "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/sashabaranov/go-openai"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -65,28 +67,68 @@ type GenTextReq struct {
 	Text string `json:"text"`
 }
 
-func TextHandler(msg *tg.MessageConfig, bot *tg.BotAPI, incomingMsg string) {
-	URL := "http://localhost:1337/generate_text"
-	// one-line post request/response...
-	response, err := http.PostForm(URL, url.Values{"text": []string{incomingMsg}})
+// func TextHandler(msg *tg.MessageConfig, bot *tg.BotAPI, incomingMsg []openai.ChatCompletionMessage) (string, error) {
+// 	log.Debugf("Running `TextHandler()` with incomingMsg: %s", incomingMsg)
+// 	URL := "http://localhost:1337/generate_text"
+// 	// one-line post request/response...
+// 	// response, err := http.PostForm(URL, url.Values{"text": []string{incomingMsg}})
+//
+// 	// okay, moving on...
+// 	// if err != nil {
+// 	// 	return "", err
+// 	// 	//handle postform error
+// 	// }
+//
+// 	defer response.Body.Close()
+// 	body, err := io.ReadAll(response.Body)
+// 	log.Debugf("%s", body)
+// 	if err != nil {
+// 		return "", err
+// 		//handle read response error
+// 	}
+// 	var jsonResp map[string]string
+// 	errJSON := json.Unmarshal(body, &jsonResp)
+// 	if errJSON != nil {
+// 		log.Debugf("Coudln't decode reponse from API: %s", err)
+// 	}
+//
+// 	log.Printf("%s\n", string(body))
+// 	msg.Text = jsonResp["response"]
+// 	log.Debugf("Got response text from API: %s", jsonResp["response"])
+// 	return jsonResp["response"], nil
+// }
 
-	// okay, moving on...
+func PostGenerateText(msgs []openai.ChatCompletionMessage) (string, error) {
+	// io.WriteString(w, "This is an API for Jolene. If you don't know how you got here, please, contact the owner @hdydylmaily using telegram.")
+	// reading body
+	log.Println(msgs)
+
+	// chat stuff
+	config := openai.ClientConfig{
+		BaseURL:    "http://localhost:1489/",
+		HTTPClient: http.DefaultClient,
+	}
+	client := openai.NewClientWithConfig(config)
+	modelName := "LLaMA_CPP"
+	// resp, err := client.Create
+	resp, err := client.CreateChatCompletion(
+		context.Background(),
+		openai.ChatCompletionRequest{
+			Model:    modelName,
+			Messages: msgs,
+			// Messages: []openai.ChatCompletionMessage{
+			// 	{
+			// 		Role:    openai.ChatMessageRoleUser,
+			// 		Content: text,
+			// 	},
+			// },
+		},
+	)
+
 	if err != nil {
-		//handle postform error
+		log.Errorf("ChatCompletion error: %v\n", err)
+		return "", err
 	}
-
-	defer response.Body.Close()
-	body, err := io.ReadAll(response.Body)
-	log.Debugf("%s", body)
-	if err != nil {
-		//handle read response error
-	}
-	var jsonResp map[string]string
-	errJSON := json.Unmarshal(body, &jsonResp)
-	if errJSON != nil {
-		log.Debugf("Coudln't decode reponse from API: %s", err)
-	}
-
-	log.Printf("%s\n", string(body))
-	msg.Text = jsonResp["response"]
+	log.Infof("Got response: %s", resp.Choices[0].Message.Content)
+	return resp.Choices[0].Message.Content, nil
 }

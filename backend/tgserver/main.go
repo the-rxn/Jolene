@@ -1,8 +1,10 @@
 package main
 
 import (
+	// "fmt"
 	"github.com/coppi3/jolene/backend/tgserver/handlers"
 	"github.com/coppi3/jolene/backend/tgserver/myDb"
+	"github.com/sashabaranov/go-openai"
 	"os"
 	"os/signal"
 	"syscall"
@@ -79,13 +81,14 @@ func main() {
 
 			dbEntry := myDb.StorageLine{
 				UserID:  update.Message.From.ID,
+				Bot:     false,
 				Message: update.Message.Text,
 				Time:    time.Now(),
 			}
 			if err := db.Add(dbEntry); err != nil {
 				log.Errorf("[DB] Couldn't write to db: %s", err)
 			}
-			log.Debugln("Inserted 1 message to db")
+			log.Debugln("Inserted 1 incoming message to db")
 
 			// Pretend like we're typing
 			chatAction := tg.NewChatAction(update.Message.Chat.ID, tg.ChatTyping)
@@ -93,11 +96,81 @@ func main() {
 			// time.Sleep(5 * 1_000) // 5 sec
 
 			msg := tg.NewMessage(update.Message.Chat.ID, "")
-			handlers.TextHandler(&msg, bot, update.Message.Text)
+			rxMsg := update.Message.Text
+			// rxMsg = fmt.Sprintf("[INST]%s[/INST]", rxMsg)
+			previousMsgs, err := db.GetMessagesByUserID(update.Message.From.ID)
+			if err != nil {
+				log.Debugf("Encountered error during fetching previous msgs: %s", err)
+			}
+			if previousMsgs == nil {
+
+				// resp, err := handlers.TextHandler(&msg, bot, rxMsg)
+				promptFromRxMsg := []openai.ChatCompletionMessage{
+					openai.ChatCompletionMessage{
+						Role:    openai.ChatMessageRoleUser,
+						Content: rxMsg,
+					}}
+				resp, err := handlers.PostGenerateText(promptFromRxMsg)
+				if err != nil {
+					log.Errorf("Didn't get response from API: %s", err)
+				}
+				respStorageLine := myDb.StorageLine{
+					UserID:  0,
+					Message: resp,
+					Time:    time.Now(),
+				}
+				if err := db.Add(respStorageLine); err != nil {
+					log.Errorf("[DB] Couldn't write to db: %s", err)
+				}
+				log.Debugln("Inserted 1 outgoing message to db")
+				msg.Text = resp
+			} else {
+				var prompts []openai.ChatCompletionMessage
+				for _, msg := range previousMsgs {
+					if msg.Bot { // if bot
+						// prompt = fmt.Sprintf("%s[INST]%s[/INST]\n", prompt, msg.Message)
+						prompt := openai.ChatCompletionMessage{
+							Role:    openai.ChatMessageRoleUser,
+							Content: msg.Message,
+						}
+						prompts = append(prompts, prompt)
+					} else { // if user
+						// prompt = fmt.Sprintf("%s\n%s\n", prompt, msg.Message)
+						prompt := openai.ChatCompletionMessage{
+							Role:    openai.ChatMessageRoleAssistant,
+							Content: msg.Message,
+						}
+						prompts = append(prompts, prompt)
+					}
+
+				}
+				// prompt = fmt.Sprintf("%s%s", prompt, rxMsg)
+				// log.Debugf("Got this previous messages from [%s:%d]\n---\n%s\n---", update.Message.From, update.Message.From.ID, prompts)
+				log.Debugf("Got %d previous messages from [%s:%d]", len(prompts), update.Message.From, update.Message.From.ID)
+				// resp, err := handlers.TextHandler(&msg, bot, prompts)
+				resp, err := handlers.PostGenerateText(prompts)
+				if err != nil {
+					log.Errorf("Didn't get response from API: %s", err)
+				}
+				// UserID 0 means it's from bot
+				respStorageLine := myDb.StorageLine{
+					UserID:  update.Message.From.ID,
+					Bot:     true,
+					Message: resp,
+					Time:    time.Now(),
+				}
+				if err := db.Add(respStorageLine); err != nil {
+					log.Errorf("[DB] Couldn't write to db: %s", err)
+				}
+				log.Debugln("Inserted 1 outgoing message to db")
+				msg.Text = resp
+
+			}
 			// msg := tg.NewMessage(update.Message.Chat.ID, update.Message.Text)
 			// msg.ReplyToMessageID = update.Message.MessageID
 
 			bot.Send(msg)
+			db.Flush()
 		}
 		if update.Message.IsCommand() {
 			// init an empty message
@@ -112,6 +185,5 @@ func main() {
 			msgToSend.ReplyToMessageID = update.Message.MessageID
 			bot.Send(msgToSend)
 		}
-		db.Flush()
 	}
 }
