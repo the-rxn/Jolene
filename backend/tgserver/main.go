@@ -2,13 +2,17 @@ package main
 
 import (
 	// "fmt"
-	"github.com/coppi3/jolene/backend/tgserver/handlers"
-	"github.com/coppi3/jolene/backend/tgserver/myDb"
-	"github.com/sashabaranov/go-openai"
+	"context"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/carlmjohnson/requests"
+	"github.com/coppi3/jolene/backend/tgserver/handlers"
+	"github.com/coppi3/jolene/backend/tgserver/myDb"
+	"github.com/sashabaranov/go-openai"
 
 	tg "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	dot "github.com/joho/godotenv"
@@ -124,6 +128,32 @@ func main() {
 					log.Errorf("[DB] Couldn't write to db: %s", err)
 				}
 				log.Debugln("Inserted 1 outgoing message to db")
+
+				bForm := url.Values{
+					"text": {resp},
+				}
+				var voiceLink string
+				request := requests.
+					URL("http://localhost:1337/generate_voice").
+					BodyForm(bForm).
+					// Headers(headers).
+					ToString(&voiceLink)
+				// ErrorJSON(&errorJSON).
+				log.Debugf("%q", request)
+				err = request.Fetch(context.Background())
+				if err != nil {
+					log.Infof("Error during API call: %s", err)
+				}
+				log.Debugf("%s", voiceLink)
+				voiceUpload := tg.FileURL(voiceLink)
+				if err != nil {
+					log.Infof("Couldn't upload file: %s", err)
+				}
+				voiceMsg := tg.NewAudio(update.Message.Chat.ID, voiceUpload)
+				bot.Send(voiceMsg)
+				if err != nil {
+					log.Errorf("Error ocurred during getting voice from API: %s", err)
+				}
 				msg.Text = resp
 			} else {
 				var prompts []openai.ChatCompletionMessage
