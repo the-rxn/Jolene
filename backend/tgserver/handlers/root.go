@@ -3,14 +3,20 @@ package handlers
 import (
 	"context"
 	"errors"
+	"time"
+
+	"github.com/carlmjohnson/requests"
+
 	// "encoding/json"
 	// "io"
 	"math/rand"
 	"net/http"
+	"net/url"
 
 	// "net/url"
 	"github.com/avast/retry-go/v4"
 
+	"github.com/coppi3/jolene/backend/tgserver/myDb"
 	"github.com/coppi3/jolene/backend/tgserver/utils"
 	tg "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/sashabaranov/go-openai"
@@ -30,8 +36,133 @@ func generateRandomUnknownResponse() string {
 	return responses[rand.Intn(5)]
 }
 
+// Handler for a text message
+// In the future need to differentiate if incomingMsg is text or voice or photo and split into different headers
+func MessageHandler(incomingMsg *tg.Message, bot *tg.BotAPI, db *myDb.DB) {
+	log.Infof("[@%s:%d] %s", incomingMsg.From.UserName, incomingMsg.From.ID, incomingMsg.Text)
+
+	dbEntry := myDb.StorageLine{
+		UserID:  incomingMsg.From.ID,
+		Bot:     false,
+		Message: incomingMsg.Text,
+		Time:    time.Now(),
+	}
+	if err := db.Add(dbEntry); err != nil {
+		log.Errorf("[DB] Couldn't write to db: %s", err)
+	}
+	log.Debugln("Inserted 1 incoming message to db")
+
+	// Pretend like we're typing
+	chatAction := tg.NewChatAction(incomingMsg.Chat.ID, tg.ChatTyping)
+	bot.Send(chatAction)
+	// time.Sleep(5 * 1_000) // 5 sec
+
+	msg := tg.NewMessage(incomingMsg.Chat.ID, "")
+	rxMsg := incomingMsg.Text
+	previousMsgs, err := db.GetMessagesByUserID(incomingMsg.From.ID)
+	if err != nil {
+		log.Debugf("Encountered error during fetching previous msgs: %s", err)
+	}
+	promptFromRxMsg := []openai.ChatCompletionMessage{
+		{
+			Role:    openai.ChatMessageRoleUser,
+			Content: rxMsg,
+		}}
+	if previousMsgs == nil {
+
+		// resp, err := handlers.TextHandler(&msg, bot, rxMsg)
+		resp, err := PostGenerateText(promptFromRxMsg)
+		if err != nil {
+			log.Errorf("Didn't get response from API: %s", err)
+		}
+		respStorageLine := myDb.StorageLine{
+			UserID:  incomingMsg.From.ID,
+			Bot:     true,
+			Message: resp,
+			Time:    time.Now(),
+		}
+		if err := db.Add(respStorageLine); err != nil {
+			log.Errorf("[DB] Couldn't write to db: %s", err)
+		}
+		log.Debugln("Inserted 1 outgoing message to db")
+
+		bForm := url.Values{
+			"text": {resp},
+		}
+		log.Debugf("Calling API [/generate_voice] with text:%s", bForm["text"][0])
+		var voiceLink string
+		request := requests.
+			URL("http://localhost:1337/generate_voice").
+			BodyForm(bForm).
+			// Headers(headers).
+			ToString(&voiceLink)
+		// ErrorJSON(&errorJSON).
+		log.Debugf("%q", request)
+		err = request.Fetch(context.Background())
+		if err != nil {
+			log.Infof("Error during API call: %s", err)
+		}
+		log.Debugf("%s", voiceLink)
+		voiceUpload := tg.FileURL(voiceLink)
+		if err != nil {
+			log.Infof("Couldn't upload file: %s", err)
+		}
+		voiceMsg := tg.NewAudio(incomingMsg.Chat.ID, voiceUpload)
+		bot.Send(voiceMsg)
+		if err != nil {
+			log.Errorf("Error ocurred during getting voice from API: %s", err)
+		}
+		msg.Text = resp
+	} else {
+		var prompts []openai.ChatCompletionMessage
+		for _, msg := range previousMsgs {
+			if msg.Bot { // if bot
+				prompt := openai.ChatCompletionMessage{
+					Role:    openai.ChatMessageRoleAssistant,
+					Content: msg.Message,
+				}
+				prompts = append(prompts, prompt)
+			} else { // if user
+				prompt := openai.ChatCompletionMessage{
+					Role:    openai.ChatMessageRoleUser,
+					Content: msg.Message,
+				}
+				prompts = append(prompts, prompt)
+			}
+
+		}
+		prompts = append(prompts, promptFromRxMsg[0])
+		log.Debugf("Got %d previous messages from [%s:%d]", len(prompts), incomingMsg.From, incomingMsg.From.ID)
+		resp, err := PostGenerateText(prompts)
+		if err != nil {
+			log.Errorf("Didn't get response from API: %s", err)
+		}
+		// UserID 0 means it's from bot
+		respStorageLine := myDb.StorageLine{
+			UserID:  incomingMsg.From.ID,
+			Bot:     true,
+			Message: resp,
+			Time:    time.Now(),
+		}
+		if err := db.Add(respStorageLine); err != nil {
+			log.Errorf("[DB] Couldn't write to db: %s", err)
+		}
+		log.Debugln("Inserted 1 outgoing message to db")
+		msg.Text = resp
+
+	}
+	// msg := tg.NewMessage(incomingMsg.Chat.ID, incomingMsg.Text)
+	// msg.ReplyToMessageID = incomingMsg.MessageID
+
+	bot.Send(msg)
+	err = db.Flush()
+	if err != nil {
+		log.Errorf("Couldn't flush DB: %s", err)
+	}
+}
+
 // Mutates text of a msg on success, otherwise returns an error
-func RootHandler(command string, msg *tg.MessageConfig, bot *tg.BotAPI) {
+func RootCommandHandler(command string, msg *tg.MessageConfig, bot *tg.BotAPI) {
 	switch command {
 	case "start":
 		startHandler(msg, bot)
@@ -70,41 +201,7 @@ type GenTextReq struct {
 	Text string `json:"text"`
 }
 
-// func TextHandler(msg *tg.MessageConfig, bot *tg.BotAPI, incomingMsg []openai.ChatCompletionMessage) (string, error) {
-// 	log.Debugf("Running `TextHandler()` with incomingMsg: %s", incomingMsg)
-// 	URL := "http://localhost:1337/generate_text"
-// 	// one-line post request/response...
-// 	// response, err := http.PostForm(URL, url.Values{"text": []string{incomingMsg}})
-//
-// 	// okay, moving on...
-// 	// if err != nil {
-// 	// 	return "", err
-// 	// 	//handle postform error
-// 	// }
-//
-// 	defer response.Body.Close()
-// 	body, err := io.ReadAll(response.Body)
-// 	log.Debugf("%s", body)
-// 	if err != nil {
-// 		return "", err
-// 		//handle read response error
-// 	}
-// 	var jsonResp map[string]string
-// 	errJSON := json.Unmarshal(body, &jsonResp)
-// 	if errJSON != nil {
-// 		log.Debugf("Coudln't decode reponse from API: %s", err)
-// 	}
-//
-// 	log.Printf("%s\n", string(body))
-// 	msg.Text = jsonResp["response"]
-// 	log.Debugf("Got response text from API: %s", jsonResp["response"])
-// 	return jsonResp["response"], nil
-// }
-
 func PostGenerateText(msgs []openai.ChatCompletionMessage) (string, error) {
-	// io.WriteString(w, "This is an API for Jolene. If you don't know how you got here, please, contact the owner @hdydylmaily using telegram.")
-	// reading body
-
 	attempts := 3
 	log.Println(msgs)
 	log.Println(msgs[0].Role, msgs[0].Content)
@@ -126,12 +223,6 @@ func PostGenerateText(msgs []openai.ChatCompletionMessage) (string, error) {
 				openai.ChatCompletionRequest{
 					Model:    modelName,
 					Messages: msgs,
-					// Messages: []openai.ChatCompletionMessage{
-					// 	{
-					// 		Role:    openai.ChatMessageRoleUser,
-					// 		Content: text,
-					// 	},
-					// },
 				},
 			)
 
@@ -156,7 +247,7 @@ func PostGenerateText(msgs []openai.ChatCompletionMessage) (string, error) {
 		}),
 	)
 	if err != nil {
-		// handle error
+		log.Errorf("Error during `PostGenerateText()`: %s", err)
 	}
 	return resp, nil
 

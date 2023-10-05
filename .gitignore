@@ -1,2 +1,4 @@
 backend/tgserver/.env
 backend/tgserver/database.db
+backend/logs
+backend/llama.*.log

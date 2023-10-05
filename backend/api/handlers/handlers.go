@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,7 +28,7 @@ func PostGenerateText(w http.ResponseWriter, r *http.Request) {
 	// io.WriteString(w, "This is an API for Jolene. If you don't know how you got here, please, contact the owner @hdydylmaily using telegram.")
 	// reading body
 	text := r.PostFormValue("text")
-	fmt.Println(text)
+	log.Debugln(text)
 
 	// chat stuff
 	config := openai.ClientConfig{
@@ -51,7 +52,7 @@ func PostGenerateText(w http.ResponseWriter, r *http.Request) {
 	)
 
 	if err != nil {
-		error := fmt.Sprintf("ChatCompletion error: %v\n", err)
+		error := fmt.Sprintf("ChatCompletion error: %v\nInput text:%s", err, text)
 		w.Header().Set("Error", error)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -60,6 +61,7 @@ func PostGenerateText(w http.ResponseWriter, r *http.Request) {
 	response := GenerateTextResp{Response: resp.Choices[0].Message.Content}
 	// responseJSON, err := json.Marshal(response)
 	if err != nil {
+		log.Errorf("Couldn't encode reponse: %s", err)
 		w.Header().Set("Error", "Couldn't encode response")
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -123,19 +125,29 @@ func PostGenerateVoice(w http.ResponseWriter, r *http.Request) {
 	err := request.Fetch(context.Background())
 
 	if err != nil {
-		fmt.Println("could not connect to play.ht: ", err)
-		fmt.Println(errorJSON)
+		log.Errorf("Couldn't connect to play.ht: %s", err)
+		log.Errorln(errorJSON)
+		w.Header().Set("Error", "Couldn't connect to play.ht")
+		w.WriteHeader(http.StatusInternalServerError)
+		return
 	}
 	var respJson map[string]interface{}
 	err = json.Unmarshal(respBuf.Bytes(), &respJson)
 	if err != nil {
-		fmt.Println("could not connect deserialize response ", err)
+		log.Debugln("could not connect deserialize response ", err)
+		w.Header().Set("Error", "Couldn't deserialize response from play.ht")
+		w.WriteHeader(http.StatusInternalServerError)
+		return
 	}
 
 	log.Debugln(respJson)
-	id := respJson["id"]
+	id, idExists := respJson["id"]
+	if !idExists {
+		w.Header().Set("Error", "Couldn't get ID from play.ht")
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 	var voice_url string
-	// go func()
 	for {
 		status, link, err := getDoneVoice(id.(string))
 		if err != nil {
@@ -185,18 +197,24 @@ func getDoneVoice(id string) (bool, string, error) {
 	err := request.Fetch(context.Background())
 
 	if err != nil {
-		fmt.Println("could not connect to play.ht: ", err)
-		fmt.Println(errorJSON)
+		log.Errorf("Couldn't connect to play.ht: %s", err)
+		log.Errorln(errorJSON)
+		connectError := errors.New("Couldn't connect to play.ht")
+		return false, "", connectError
 	}
 
 	var respJson map[string]interface{}
 	if respBuf.Len() != 0 {
 		err = json.Unmarshal(respBuf.Bytes(), &respJson)
 		if err != nil {
-			fmt.Println("could not connect deserialize response ", err)
+			log.Debugln("could not connect deserialize response ", err)
 		}
 		log.Debugf("%q", respJson)
-		output := respJson["output"]
+		output, outputExists := respJson["output"]
+		if !outputExists {
+			noOutputError := errors.New("Couldn't get output from play.ht")
+			return false, "", noOutputError
+		}
 		if output == nil {
 			return false, "", nil
 		}
@@ -206,28 +224,3 @@ func getDoneVoice(id string) (bool, string, error) {
 	return false, "", nil
 
 }
-
-// def generate_audio_wav_link(text: str) -> str:
-//     url = "https://play.ht/api/v2/tts"
-//     payload = {
-//         "text": f"{text}",
-//         "voice": "s3://voice-cloning-zero-shot/39ae6d35-1ee9-4bfd-8d61-85868c5bb98b/seductive1/manifest.json",
-//         "quality": "medium",
-//         "output_format": "wav",
-//         "speed": 1,
-//         "sample_rate": 24000
-//     }
-//     headers = {
-//         "accept": "text/event-stream",
-//         "content-type": "application/json",
-//         "AUTHORIZATION": "286aa3a9d3964acbb77853e0d79fd934",
-//         "X-USER-ID": "NDvxEXyoSgb8iCvORo4aYvZUGv52"
-//     }
-//
-//     response = requests.post(url, json=payload, headers=headers)
-//     data = response.text
-//     data_with_no_newline = "".join([s for s in data.splitlines(True) if s.strip()])
-//     print(data_with_no_newline)
-//     jsoned = json.loads(data_with_no_newline.splitlines()[-1].replace("data: ", ""))
-//     print(jsoned)
-//     return jsoned.get("url")
